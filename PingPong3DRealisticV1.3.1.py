@@ -1,4 +1,5 @@
 from ursina import *
+from ursina.prefabs.trail_renderer import TrailRenderer  # Import smugi
 import random
 import numpy as np
 
@@ -10,54 +11,85 @@ camera.position = (0, 1.5, -6)
 camera.rotation_x = 10
 
 # --- ŚRODOWISKO ---
-Entity(model="plane", scale=100, texture="white_cube", texture_scale=(100, 100),
-       color=color.light_gray, y=-0.5)
+Entity(
+    model="plane",
+    scale=100,
+    texture="white_cube",
+    texture_scale=(100, 100),
+    color=color.light_gray,
+    y=-0.5,
+)
 Sky()
 
 # --- STÓŁ ---
 table = Entity(model="cube", scale=(2, 0.1, 4), color=color.dark_gray, y=0, z=1)
-net = Entity(model="cube", scale=(2.1, 0.3, 0.05), y=0.15, z=1, color=color.white, alpha=0.7)
+net = Entity(
+    model="cube",
+    scale=(2.1, 0.3, 0.05),
+    y=0.15,
+    z=1,
+    color=color.white,
+    alpha=0.7,
+    collider="box",
+)
 
 # --- PALETKI ---
-player_paddle = Entity(model="cube", color=color.red, scale=(0.4, 0.4, 0.1), collider="box", y=0.5, z=-1)
-ai_paddle = Entity(model="cube", color=color.blue, scale=(0.4, 0.4, 0.1), collider="box", z=3, y=0.5)
+player_paddle = Entity(
+    model="cube", color=color.red, scale=(0.4, 0.4, 0.1), collider="box", y=0.5, z=-1
+)
+ai_paddle = Entity(
+    model="cube", color=color.blue, scale=(0.4, 0.4, 0.1), collider="box", z=3, y=0.5
+)
 
 # --- PIŁKA ---
 ball = Entity(model="sphere", scale=0.15, color=color.orange, collider="sphere", y=0.5)
-ball.velocity = Vec3(0,0,0)
-ball.spin = Vec3(0,0,0)
+ball.velocity = Vec3(0, 0, 0)
+ball.spin = Vec3(0, 0, 0)
+
+# --- SMUGA (TRAIL) ---
+# size=[szerokość_startowa, szerokość_końcowa]
+ball_trail = TrailRenderer(
+    parent=ball,
+    size=[0.1, 0.0], 
+    segments=12,
+    min_spacing=0.05,
+    color=color.orange,
+    alpha=0.6
+)
 
 # --- FIZYKA ---
 gravity = -9.81
 air_density = 1.2
 drag_coefficient = 0.47
-ball_area = np.pi * (ball.scale_x/2)**2
-magnus_coeff = 0.0005
+ball_area = np.pi * (ball.scale_x / 2) ** 2
+magnus_coeff = 0.0008
 paddle_speed = 5
-max_speed = 10
+max_speed = 15
 
-# --- OGRANICZENIA OKNA ---
+# --- OGRANICZENIA ---
 ceiling_y = 2.0
-floor_y = table.y + ball.scale_y/2
+floor_y = table.y + 0.05
 
 # --- AI ---
-ai_base_speed = 3.5
-ai_error_base = 0.3
-ai_reaction_time_base = 0.25
+ai_base_speed = 4.0
+ai_error_base = 0.25
+ai_reaction_time_base = 0.2
 ai_timer = 0
-ai_target = Vec3(0,0,0)
+ai_target = Vec3(0, 0, 0)
 
 # --- PUNKTY ---
 player_score = 0
 ai_score = 0
 game_over = False
-
-score_text = Text(text="0 : 0", scale=2, y=0.45)
-end_text = Text(text="", scale=3, y=0, color=color.yellow)
+score_text = Text(text="0 : 0", scale=2, y=0.45, origin=(0,0))
+end_text = Text(text="", scale=3, y=0, color=color.yellow, origin=(0,0))
 end_text.enabled = False
 
+
+# --- FUNKCJE GRY ---
 def update_score():
     score_text.text = f"{player_score} : {ai_score}"
+
 
 def end_game(text):
     global game_over
@@ -65,6 +97,7 @@ def end_game(text):
     end_text.text = text
     end_text.enabled = True
     invoke(restart_game, delay=3)
+
 
 def restart_game():
     global player_score, ai_score, game_over
@@ -75,33 +108,36 @@ def restart_game():
     update_score()
     reset_ball()
 
-# --- START PIŁKI BLISKO GRACZA ---
+
 def reset_ball():
     global ai_target
+    # Czyścimy starą smugę przed resetem, żeby nie "strzeliła" przez cały stół
+    if hasattr(ball_trail, 'renderer'):
+        ball_trail.renderer.model.path = [ball.world_position for i in range(2)]
+    
     ai_paddle.position = Vec3(0, 0.5, 3)
     ball.position = Vec3(0, 0.65, -1.5)
-    ball.velocity = Vec3(random.uniform(-1,1), 2, 5)
-    ball.spin = Vec3(random.uniform(-1,1), random.uniform(-1,1), random.uniform(-1,1))
+    ball.velocity = Vec3(random.uniform(-1, 1), 3.0, 5.0)
+    ball.spin = Vec3(
+        random.uniform(-2, 2), random.uniform(-2, 2), random.uniform(-1, 1)
+    )
     ai_target = Vec3(ball.x, ball.y, ai_paddle.z)
+    player_paddle.prev_pos = Vec3(player_paddle.position)
+    ai_paddle.prev_pos = Vec3(ai_paddle.position)
 
-reset_ball()
-update_score()
 
-# --- FUNKCJE FIZYCZNE ---
+# --- MECHANIKA FIZYKI ---
 def apply_drag(v):
-    v_np = np.array([v.x, v.y, v.z])
-    speed = np.linalg.norm(v_np)
+    speed = v.length()
     if speed == 0:
-        return Vec3(0,0,0)
+        return Vec3(0, 0, 0)
     drag_mag = 0.5 * air_density * drag_coefficient * ball_area * speed**2
-    drag = -v_np / speed * drag_mag
-    return Vec3(*drag)
+    return -v.normalized() * drag_mag
+
 
 def apply_magnus(v, spin):
-    v_np = np.array([v.x, v.y, v.z])
-    spin_np = np.array([spin.x, spin.y, spin.z])
-    magnus = magnus_coeff * np.cross(spin_np, v_np)
-    return Vec3(*magnus)
+    return Vec3(*np.cross([spin.x, spin.y, spin.z], [v.x, v.y, v.z])) * magnus_coeff
+
 
 def predict_ball_position():
     if ball.velocity.z == 0:
@@ -114,98 +150,103 @@ def predict_ball_position():
     predicted_y += random.uniform(-ai_error_base, ai_error_base)
     return Vec3(predicted_x, predicted_y, ai_paddle.z)
 
+
 # --- UPDATE ---
 def update():
     global player_score, ai_score, ai_timer, ai_target, game_over
 
     if game_over:
         return
-
     dt = time.dt
 
-    # --- Sterowanie gracza ---
+    # Sterowanie gracza
     target_x = mouse.x * 5
     target_y = max(0.1, (mouse.y * 4) + 1)
-    player_paddle.x += clamp(target_x - player_paddle.x, -paddle_speed*dt, paddle_speed*dt)
-    player_paddle.y += clamp(target_y - player_paddle.y, -paddle_speed*dt, paddle_speed*dt)
+    
+    # Obliczanie prędkości paletki (do nadawania rotacji)
+    current_player_vel = (Vec3(target_x, target_y, player_paddle.z) - player_paddle.position) / dt
+    
+    player_paddle.x += clamp(target_x - player_paddle.x, -paddle_speed * dt, paddle_speed * dt)
+    player_paddle.y += clamp(target_y - player_paddle.y, -paddle_speed * dt, paddle_speed * dt)
     player_paddle.y = clamp(player_paddle.y, 0.2, 1.8)
 
-    # --- AI ---
+    # AI
+    ai_vel = Vec3(0,0,0)
     if ball.velocity.z > 0:
-        ai_timer -= dt * (0.7 if abs(ball.velocity.x) > 5 or abs(ball.spin.z) > 3 else 1)
+        ai_timer -= dt
         if ai_timer <= 0:
             ai_target = predict_ball_position()
             ai_timer = ai_reaction_time_base + random.uniform(0, 0.1)
 
         move_vector = ai_target - ai_paddle.position
-        max_move_x = ai_base_speed * dt
-        max_move_y = (ai_base_speed * 0.9) * dt
-        move_vector.x = clamp(move_vector.x, -max_move_x, max_move_x)
-        move_vector.y = clamp(move_vector.y, -max_move_y, max_move_y)
+        max_move = ai_base_speed * dt
+        if move_vector.length() > max_move:
+            move_vector = move_vector.normalized() * max_move
+        
+        old_ai_pos = Vec3(ai_paddle.position)
         ai_paddle.position += move_vector
         ai_paddle.y = clamp(ai_paddle.y, 0.2, 1.8)
+        ai_vel = (ai_paddle.position - old_ai_pos) / dt
 
-    # --- Kolizje z paletkami ---
-    for paddle in [player_paddle, ai_paddle]:
+    # Kolizje z paletkami
+    for paddle, vel in [(player_paddle, current_player_vel), (ai_paddle, ai_vel)]:
         hit = ball.intersects(paddle)
         if hit.hit:
-            direction = 1 if paddle == player_paddle else -1
             delta_y = ball.y - paddle.y
             delta_x = ball.x - paddle.x
-            ball.velocity.z = 7 * direction
-            ball.velocity.y = clamp(2 + delta_y*3, 2, 3)
-            ball.velocity.x += delta_x * 3
-            ball.spin += Vec3(delta_y*2, 0, delta_x*2)
+            ball.velocity.z *= -0.95
+            ball.velocity.x += delta_x * 2 + 0.3 * vel.x
+            ball.velocity.y += delta_y * 2 + 0.3 * vel.y
+            
+            # Nadawanie rotacji przy uderzeniu
+            ball.spin += Vec3(delta_y * 3 + vel.y, 0.5 * vel.x + delta_x * 2, delta_x * 2)
+            
+            if ball.velocity.length() > max_speed:
+                ball.velocity = ball.velocity.normalized() * max_speed
+            
+            # Odsunięcie piłki, by uniknąć podwójnej kolizji
+            if paddle == player_paddle:
+                ball.z = paddle.z + 0.15
+            else:
+                ball.z = paddle.z - 0.15
 
-    # --- Fizyka piłki ---
-    v_np = np.array([ball.velocity.x, ball.velocity.y, ball.velocity.z])
-    v_np += np.array([0, gravity, 0]) * dt
-    drag = np.array([apply_drag(ball.velocity).x, apply_drag(ball.velocity).y, apply_drag(ball.velocity).z])
-    magnus = np.array([apply_magnus(ball.velocity, ball.spin).x, apply_magnus(ball.velocity, ball.spin).y, apply_magnus(ball.velocity, ball.spin).z])
-    v_np += drag * dt + magnus * dt
-    if np.linalg.norm(v_np) > max_speed:
-        v_np = v_np / np.linalg.norm(v_np) * max_speed
-    ball.velocity = Vec3(*v_np)
+    # Fizyka piłki (Aerodynamika + Grawitacja)
+    ball.velocity += Vec3(0, gravity, 0) * dt
+    ball.velocity += apply_drag(ball.velocity) * dt
+    ball.velocity += apply_magnus(ball.velocity, ball.spin) * dt
     ball.position += ball.velocity * dt
 
-    # --- Odbicie od stołu i sufitu ---
-    if ball.y - ball.scale_y/2 < floor_y:
-        ball.y = floor_y + ball.scale_y/2
-        ball.velocity.y = abs(ball.velocity.y) * 0.8
-    if ball.y + ball.scale_y/2 > ceiling_y:
-        ball.y = ceiling_y - ball.scale_y/2
-        ball.velocity.y = -abs(ball.velocity.y) * 0.8
+    # Kolizja z siatką
+    if ball.intersects(net).hit:
+        ball.velocity.z *= -0.5
+        ball.velocity.x *= 0.5
+        ball.spin *= 0.8
+        ball.z = net.z + (0.1 if ball.velocity.z > 0 else -0.1)
 
-    # --- Punktacja i reset ---
-    half_width = table.scale_x / 2
-    half_depth = table.scale_z / 2
-    table_top = table.y + table.scale_y/2
-    table_bottom = table.y - table.scale_y/2
+    # Odbicia od stołu
+    if ball.y - 0.075 < floor_y and abs(ball.x) < table.scale_x/2 and abs(ball.z - 1) < table.scale_z/2:
+        ball.y = floor_y + 0.075
+        ball.velocity.y = abs(ball.velocity.y) * 0.85
+        # Tu można dodać wpływ rotacji na odbicie, by było jeszcze trudniej!
 
-    if ball.z < -3:
-        global ai_score
+    # Punktacja
+    if ball.z < -3.5:
         ai_score += 1
         update_score()
         reset_ball()
-        return
-
-    if ball.z > 5:
-        global player_score
+    elif ball.z > 5.5:
         player_score += 1
         update_score()
         reset_ball()
-        return
-
-    if (ball.x < table.x - half_width or ball.x > table.x + half_width or
-        ball.y - ball.scale_y/2 < table_bottom or ball.y + ball.scale_y/2 > ceiling_y):
+    
+    # Reset przy wypadnięciu poza stół
+    if ball.y < -1:
         reset_ball()
-        return
 
-    # --- Zwycięstwo ---
-    if player_score >= 7:
-        end_game("Wygrałeś!")
-    if ai_score >= 7:
-        end_game("Przegrałeś!")
+    if player_score >= 7: end_game("Wygrałeś!")
+    if ai_score >= 7: end_game("Przegrałeś!")
 
 mouse.visible = False
+reset_ball()
+update_score()
 app.run()
